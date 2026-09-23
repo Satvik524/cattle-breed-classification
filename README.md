@@ -1,142 +1,206 @@
 # 🐄 Indian Cattle Breed Classifier
 
-A fine-grained image classifier that identifies **50 Indian cattle breeds** from a photograph — built end-to-end, from scratch-collected data to a deployed web app.
+A fine-grained computer vision system that classifies **50 Indian cattle breeds** from photographs using **YOLO + ConvNeXtSmall**, served with a **FastAPI backend**, **Streamlit frontend**, and **Docker Compose containerization**.
 
-This started as a tutorial-free first computer vision project and turned into a full applied-ML exercise: building a custom dataset from scattered online sources and YouTube footage, discovering and fixing a real data-leakage problem, debugging a subtle TensorFlow/Keras bug in the fine-tuning loop, and shipping a working Streamlit app on top of it.
+---
 
-## Table of Contents
-- [App Demo](#app-demo)
-- [Results](#results)
-- [Dataset](#dataset)
-- [Model Architecture](#model-architecture)
-- [Training Methodology](#training-methodology)
-- [Web App](#web-app)
-- [Repository Structure](#repository-structure)
-- [Setup & Installation](#setup--installation)
-- [Tech Stack](#tech-stack)
-- [Known Limitations](#known-limitations)
-
-## App Demo
-![App demo](images/streamlit_demo2.png)
+## 🚀 Demo
 
 
-## Results
+![Streamlit Demo](images/streamlit_demo2.png)
 
-**Held-out test accuracy: 52.72%** across 50 fine-grained breed classes, measured on a video-level held-out test set that was never touched during training or model selection.
+---
+
+## 🧠 Architecture
+
+```text
+User Image
+    ↓
+Streamlit Frontend
+    ↓
+FastAPI Backend
+    ↓
+YOLO Cattle Detection & Cropping
+    ↓
+ConvNeXtSmall Breed Classifier
+    ↓
+Top-3 Breed Predictions
+```
+
+The same YOLO-based cropping pipeline is used during both dataset preparation and inference, keeping preprocessing consistent and reducing background-related shortcuts.
+
+---
+
+## 📊 Results
+
+**Held-out test accuracy: 52.72% across 50 breeds**
+
+The held-out test set was built from a separate pool of farmer-recorded cattle videos, with **source-level (video-level) splitting** to prevent frame leakage between train, validation, and test sets. An earlier version of the pipeline had leakage between splits that inflated accuracy by more than 20 percentage points — this was diagnosed and fixed by rebuilding the splits at the video/source level rather than the frame level.
 
 > **Why this number is lower than an earlier version of this project claimed (~75%), and why that's the right outcome:**
-> The initial dataset was built by merging two Kaggle datasets, utilizing MD5 hashing to successfully eliminate exact duplicates. However, investigating the model's decision-making using Grad-CAM revealed a major issue: the dataset still contained significant noise, including human faces, text, and complex background graphics. The Grad-CAM heatmaps showed the model was "cheating" (shortcut learning) by latching onto these irrelevant background artifacts instead of focusing on the actual subject.
+> The initial dataset merged two Kaggle datasets and used MD5 hashing to remove exact duplicates. But inspecting the model's decisions with Grad-CAM revealed the dataset still had significant noise — human faces, text, and busy background graphics — and the model was "cheating" (shortcut learning) by latching onto those background artifacts instead of the animal itself. The dataset was then strictly, manually cleaned to remove these misleading images, forcing the model to genuinely learn the correct features. That drops the accuracy score to 52.72% — lower, but honest, and far more representative of real-world performance.
 
-> For this updated version, the dataset was strictly manually cleaned to remove these misleading images. Forcing the model to genuinely learn the correct features rather than relying on spurious background correlations naturally drops the accuracy score to 52.72%. While lower, this metric is honest, robust, and much more reflective of how the model will actually perform in the real world..
-
-### Per-breed F1 scores
+**F1 Score by Breed**
 
 ![F1 scores per breed](images/f1_final.png)
 
-### Grad-CAM: verifying the model looks at the right thing
+**Grad-CAM**
 
-Fine-grained breed classification can fail silently — a model can hit good numbers while actually keying off background, lighting, or watermarks instead of the animal itself. Grad-CAM was used throughout development to check this.
+Grad-CAM was used to verify that the model focuses on the cattle itself rather than background or contextual cues — fine-grained classifiers can otherwise hit good numbers while actually keying off background, lighting, or watermarks.
 
 ![Grad-CAM visualization](images/grad_cam_results.png)
 
-*High-confidence, correctly-classified examples were checked specifically to rule out the model "getting lucky" via shortcuts — the activation consistently lands on the animal rather than background clutter, though some diffuse (rather than tightly feature-localized) activation remains, discussed in [Known Limitations](#known-limitations).*
+*High-confidence, correctly-classified examples were specifically checked to rule out the model "getting lucky" via shortcuts — activation consistently lands on the animal rather than background clutter, though some diffuse (rather than tightly feature-localized) activation remains (see [Known Limitations](#known-limitations)).*
 
-### MixUp augmentation
+**MixUp Augmentation**
 
 ![MixUp example](images/images_after_mixup.png)
 
 *MixUp blends pairs of training images and their labels proportionally, discouraging the model from memorizing sharp decision boundaries around individual training examples — a meaningful regularizer given several breed classes have fewer than 150 images.*
 
-## Dataset
+---
 
-50 Indian cattle breeds, built from scratch by combining and cleaning several sources:
+## 🗂️ Dataset
 
-- **Merged public datasets** found on Kaggle and elsewhewhere, combined and deduplicated.
-- **YouTube video frame extraction** — targeted collection for underrepresented breeds, with frames sampled at intervals and near-duplicate frames removed via perceptual hashing (not just exact-match hashing).
-- **YOLO-based cropping** — every image is passed through a YOLO detector to crop tightly around the animal, reducing background/shortcut-learning risk and keeping training and inference preprocessing consistent.
-- **Manual cleanup** — hand-reviewed collection for the rarest, most underrepresented breeds where automated sourcing wasn't enough.
+- 50 Indian cattle breeds
+- Public datasets from Kaggle and other sources
+- YouTube video frames collected for underrepresented breeds
+- Perceptual hashing to remove near-duplicate images
+- YOLO-based cattle cropping
+- Manual data cleaning
+- Source-level train/validation/test splitting to reduce video-frame leakage
 
-**Leak-proof splitting:** val/test frames are drawn from an entirely separate pool of source videos that never contributes to the training set — leakage is prevented by construction, not just detected after the fact.
+The dataset is imbalanced, with roughly a **7.6x gap** between the largest and smallest classes — several rare breeds have fewer than 100 training images.
 
-Class balance is imbalanced but bounded (~7.6x between the largest and smallest classes after rebalancing, down from ~17x in an earlier version), addressed during training with class-weighted loss.
+---
 
-## Model Architecture
+## 🏗️ Model
 
-- **Backbone:** ConvNeXtSmall, ImageNet-pretrained, with Keras' built-in input preprocessing enabled for consistency with the pretraining recipe.
-- **Head:** Global Average Pooling → LayerNormalization (ε=1e-6) → Dense(256, GELU, L2-regularized) → Dropout(0.6) → Dense(50, softmax).
-- **Precision:** mixed float16 for training throughput.
-- Input resolution: 224×224.
+- **Backbone:** ConvNeXtSmall, pretrained on ImageNet
+- **Input:** 224 × 224
+- **Head:** Global Average Pooling → LayerNorm → Dense(256, GELU) → Dropout → 50-class Softmax
+- **Training:** Progressive fine-tuning with staged backbone unfreezing, AdamW optimizer, class-weighted loss, MixUp augmentation to handle class imbalance
+- **Precision:** Mixed float16
 
-## Training Methodology
+---
 
-**Progressive 4-phase fine-tuning**, unfreezing more of the backbone at each stage while stepping the learning rate down:
-1. Frozen backbone — train the head only.
-2. Last 30 backbone layers unfrozen.
-3. Last 60 backbone layers unfrozen.
-4. Full backbone unfrozen.
+## 🔌 API
 
-**AdamW**, not plain Adam — ConvNeXt's training recipe assumes *decoupled* weight decay, which behaves predictably across all weights regardless of their gradient history; L2-regularization mixed into a plain-Adam gradient gets unevenly scaled by Adam's own per-parameter adaptivity, which isn't what you want from weight decay.
+### `POST /predict`
 
-**Class-weighted, MixUp-compatible loss** — standard `class_weight` arguments in Keras assume a single hard label per example, which breaks once MixUp blends two images' labels together. A custom loss computes each sample's weight as the *dot product* of the (possibly blended) label vector with the class-weight vector, so a 70/30 MixUp blend gets a correctly proportional weight rather than an undefined one.
+Accepts an image and returns the predicted breed, confidence, and top-3 predictions.
 
-**Held-out test set discipline** — the test set is evaluated exactly once, after every training phase and hyperparameter decision is finalized. Model checkpointing and early stopping use the validation set only.
+**Example response:**
 
+```json
+{
+  "predicted_breed": "Hariana",
+  "confidence": 0.1916,
+  "top_predictions": [
+    {
+      "breed": "Hariana",
+      "confidence": 0.1916
+    },
+    {
+      "breed": "Amritmahal",
+      "confidence": 0.0928
+    },
+    {
+      "breed": "Tharparkar",
+      "confidence": 0.0805
+    }
+  ]
+}
+```
 
-## Web App
+### `GET /health`
 
-A Streamlit app (`app.py`) for interactive inference:
+Checks whether the FastAPI service and both ML models (YOLO detector + classifier) are loaded and ready.
 
-1. User uploads a photo.
-2. A YOLO model detects and crops the cattle from the image — the same crop-to-animal step used during dataset creation, keeping inference consistent with training.
-3. The cropped image is classified by the ConvNeXt model, hosted on Hugging Face Hub and downloaded on first run (too large for the git repo directly).
-4. Top-3 predicted breeds are shown with confidence bars.
+**FastAPI docs:** `http://localhost:8000/docs`
 
-### Running it locally
+---
+
+## 🐳 Docker
+
+The application runs as two services:
+
+- **FastAPI API**
+- **Streamlit frontend**
+
+Docker Compose uses an API health check so the frontend only starts once the backend and its models are fully loaded.
+
+### Run
 
 ```bash
 git clone https://github.com/Satvik524/cattle-breed-classification.git
 cd cattle-breed-classification
-pip install -r requirements.txt
-streamlit run app.py
+docker compose up --build
 ```
 
-The classifier weights download automatically from Hugging Face Hub on first launch. YOLO weights download automatically via `ultralytics` on first use.
+Open:
 
-## Repository Structure
+- Streamlit: `http://localhost:8501`
+- FastAPI: `http://localhost:8000`
+- API Docs: `http://localhost:8000/docs`
 
-```
-├── app.py                                          # Streamlit inference app
+---
+
+## 📁 Repository Structure
+
+```text
+cattle-breed-classification/
+├── api/
+│   ├── Dockerfile
+│   ├── inference.py
+│   ├── main.py
+│   ├── model_loader.py
+│   ├── schemas.py
+│   └── user_input.py
+├── images/
 ├── notebooks/
-│   ├── 01 collecting_and_cleaning_data.ipynb                    # Creating the Dataset for the new model
-│   ├── 02 cattle_breed_final.ipynb                     # Evaluating the previous model and training the new one
-│   └── 03 cattle_breed_old.ipynb                     # Training of the previous model
-├── images                                         # README images (F1 chart, Grad-CAM, MixUp)
-├── requirements.txt
+├── app.py
+├── docker-compose.yml
+├── Dockerfile.streamlit
+├── requirements-api.txt
+├── requirements-streamlit.txt
+├── helper_functions.py
+├── yolo26m.pt
 └── README.md
 ```
 
-*(Notebook filenames above are suggested — rename your uploaded files to match for a cleaner repo layout.)*
+---
 
-## Setup & Installation
+## 🛠️ Tech Stack
 
-```bash
-git clone https://github.com/Satvik524/cattle-breed-classification.git
-cd cattle-breed-classification
-pip install -r requirements.txt
-```
+- **Machine Learning:** TensorFlow, Keras, ConvNeXtSmall
+- **Object Detection:** YOLO / Ultralytics
+- **Backend:** FastAPI, Uvicorn
+- **Frontend:** Streamlit
+- **Data Processing:** NumPy, Pandas, PIL, OpenCV, ImageHash
+- **Deployment:** Docker, Docker Compose
+- **Model Hosting:** Hugging Face Hub
 
-Core dependencies: `tensorflow`, `streamlit`, `ultralytics`, `pillow`, `numpy`, `scikit-learn`, `imagehash`.
-
-## Tech Stack
-
-- **Modeling:** TensorFlow / Keras, ConvNeXtSmall
-- **Detection/cropping:** YOLO (Ultralytics)
-- **Data engineering:** perceptual hashing (`imagehash`), OpenCV/PIL
-- **App:** Streamlit
-- **Hosting:** Hugging Face Hub (model weights)
+---
 
 ## Known Limitations
 
-- **`Krishna_valley` currently scores 0 F1.** This breed has a naturally wide color range (grey-white, white, brown-and-white, black-and-white, mottled, per breed references), which was initially suspected as a possible mislabeling issue in the training images — that suspicion didn't hold up on inspection; the images appear to be genuine, correctly-labeled examples of natural breed variation. The more likely explanation is plain data scarcity: this is a rare breed with limited available footage, and available sources have been exhausted. Documented here rather than papered over.
-- A handful of other low-count classes (under ~100 training images) score below the rest of the distribution for similar reasons — fine-grained classification with this much per-class variation is a genuinely hard regime below a certain sample size.
-- The model has not been benchmarked against real-world, non-curated photos beyond the held-out test set and informal Streamlit testing.
+- 52.72% accuracy on the current 50-breed held-out test set
+- Performance varies significantly across breeds, especially rare classes
+-- `Krishna_valley` currently scores 0 F1, primarily due to limited training data and the natural visual variation within the breed.
+- Several other low-count classes also perform below the overall distribution.
+- A handful of other low-count classes (under ~100 training images) score below the rest of the distribution for the same reason — fine-grained classification with this much per-class variation is a genuinely hard regime below a certain sample size
+- When multiple cattle are detected in one image, only the highest-confidence detection is classified
+- No explicit unknown/uncertain-breed rejection mechanism yet
+- The held-out test set is relatively small, limiting the statistical strength of the evaluation
+
+---
+
+## 📌 Future Improvements
+
+- Increase data for rare breeds to reduce the current ~7.6x class imbalance
+- Improve confidence calibration and uncertainty handling
+- Support multiple cattle in a single image
+- Expand real-world evaluation data
+- Optimize inference speed and Docker image size
+- Deploy to AWS for public access
