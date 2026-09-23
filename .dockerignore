@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+
+.git/
+.gitignore
+
+.vscode/
+
+notes.md
+
+notebooks/
+images/
+
+README.md
+
+helper_functions.py
+

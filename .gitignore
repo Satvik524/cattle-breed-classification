@@ -1,4 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model files
 *.keras
 *.h5
+
+# Environment / secrets
+.env
+.venv/
+venv/
+
+# macOS
 .DS_Store
-.ipynb_checkpoints/
+
+# VS Code
+.vscode/
